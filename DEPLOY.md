@@ -2,7 +2,7 @@
 
 ## 1. Tạo kho GitHub riêng tư
 
-Đăng nhập GitHub, chọn New repository, tên nail-boutique, chọn Private rồi Create repository. Chọn Add file → Upload files. Tải lên server.cjs, manager-accounts.json, package.json, render.yaml, các tệp test và toàn bộ thư mục dist. Các tệp này phải nằm ở gốc kho. Không tải data, tệp SQLite, .git hoặc .openai lên.
+Đăng nhập GitHub, chọn New repository, tên nail-boutique, chọn Private rồi Create repository. Chọn Add file → Upload files. Tải lên server.cjs, profiles.cjs, manager-accounts.json, package.json, render.yaml, các tệp test và toàn bộ thư mục dist. Các tệp này phải nằm ở gốc kho. Không tải data, tệp SQLite, .git hoặc .openai lên.
 
 ## 2. Triển khai Render
 
@@ -24,3 +24,6 @@ Nếu thêm tên miền riêng, đặt PUBLIC_ORIGIN thành URL HTTPS của tên
 
 Website chưa được triển khai tự động: cần tài khoản GitHub/Render của chủ sở hữu và xác nhận chi phí trên Render. Múi giờ báo cáo hiện vẫn theo trình duyệt, chưa cố định Europe/Paris giữa các thiết bị. Trước khi sử dụng chính thức tại Pháp cần thống nhất múi giờ và kiểm tra sao lưu/khôi phục dữ liệu.
 
+
+## Email và hồ sơ
+Trước khi tạo tài khoản mới, cấu hình RESEND_API_KEY và EMAIL_FROM trên Render theo EMAIL-SETUP.md. Tài khoản mới bắt buộc email và điện thoại; email phải xác nhận thật, điện thoại chưa xác thực. Không tải khóa API hoặc dữ liệu SQLite lên kho.

@@ -1,11 +1,11 @@
 const {createApp}=require('./server.cjs');const assert=require('node:assert/strict');const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
-async function main(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nail-auth-test-'));const server=createApp({dbPath:path.join(dir,'test.sqlite')});await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
+async function main(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nail-auth-test-'));const server=createApp({requireContactVerification:false,dbPath:path.join(dir,'test.sqlite')});await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
 async function call(route,data,cookie){const response=await fetch(origin+'/api/'+route,{method:data?'POST':'GET',headers:{...(data?{'Content-Type':'application/json','X-Nail-Request':'1',Origin:origin}:{}),...(cookie?{Cookie:cookie}:{})},body:data?JSON.stringify(data):undefined});return {status:response.status,data:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]};}
 try{assert.equal((await call('state')).status,401);const setup=await call('setup',{name:'Owner',username:'manager',password:'ManagerTest123!'});assert.equal(setup.status,201);const manager=setup.cookie;assert.equal((await call('setup',{name:'Other',username:'other',password:'ManagerTest123!'})).status,409);
 assert.equal((await call('users',{name:'Lan',username:'lan',password:'EmployeeTest123!'},manager)).status,201);assert.equal((await call('users',{name:'Mai',username:'mai',password:'EmployeeTest123!'},manager)).status,201);assert.equal((await call('login',{username:'lan',password:'wrong'})).status,401);
 const login=await call('login',{username:'lan',password:'EmployeeTest123!'});assert.equal(login.status,200);let employee=login.cookie;const own=(await call('state',null,employee)).data;const full=(await call('state',null,manager)).data;assert.equal(own.employees.length,1);assert.equal(full.employees.length,2);const other=full.employees.find(e=>e.id!==own.user.id);
-assert.equal((await call('clock',{employee:other.id,action:'in'},employee)).status,403);assert.equal((await call('users',{name:'Hack',username:'hack',password:'EmployeeTest123!'},employee)).status,403);assert.equal((await call('shifts',{},employee)).status,403);
-assert.equal((await call('clock',{action:'in'},employee)).status,200);assert.equal((await call('clock',{action:'in'},employee)).status,409);assert.equal((await call('clock',{action:'out'},employee)).status,200);assert.equal((await call('clock',{action:'out'},employee)).status,409);
+assert.equal((await call('clock',{employee:other.id,action:'in'},employee)).status,403);assert.equal((await call('clock',{employee:own.user.id,action:'in'},employee)).status,403);assert.equal((await call('users',{name:'Hack',username:'hack',password:'EmployeeTest123!'},employee)).status,403);assert.equal((await call('shifts',{},employee)).status,403);
+assert.equal((await call('clock',{employee:own.user.id,action:'in'},manager)).status,200);assert.equal((await call('clock',{employee:own.user.id,action:'in'},manager)).status,409);assert.equal((await call('clock',{employee:own.user.id,action:'out'},manager)).status,200);assert.equal((await call('clock',{employee:own.user.id,action:'out'},manager)).status,409);
 const before=(await call('state',null,employee)).data.shifts[0];assert(before.end);const shift={employee:own.user.id,start:'2026-01-12T22:00:00+07:00',end:'2026-01-13T06:00:00+07:00',break:30};assert.equal((await call('shifts',shift,manager)).status,200);assert.equal((await call('shifts',shift,manager)).status,409);assert.equal((await call('state',null,employee)).data.shifts.length,2);
 assert.equal((await call('pay-rate',{employee:own.user.id,rate:'12.50'},employee)).status,403);
 assert.equal((await call('pay-rate',{employee:own.user.id,rate:'-1'},manager)).status,400);
@@ -36,10 +36,23 @@ assert.equal((await call('orders',{...order,date:'2099-01-01'},manager)).status,
 assert.equal((await call('orders',{...order,employee:'missing'},manager)).status,400);
 assert.equal((await call('orders?month=2026-13',null,manager)).status,400);
 assert.equal((await call('state',null,employee)).data.orders,undefined);
+assert.equal((await call('employees',null,employee)).status,403);
+assert.equal((await call('employees',{id:own.user.id,action:'edit',name:'Lan Updated',job:'Senior'},employee)).status,403);
+assert.equal((await call('employees',{id:own.user.id,action:'edit',name:'Lan Updated',job:'Senior'},manager)).status,200);
+assert.equal((await call('employees',{id:full.user.id,action:'lock'},manager)).status,404);
+assert.equal((await call('employees',{id:own.user.id,action:'lock'},manager)).status,200);
+assert.equal((await call('state',null,employee)).status,401);
+assert.equal((await call('login',{username:'lan',password:'EmployeeTest123!'})).status,403);
+assert.equal((await call('employees',{id:own.user.id,action:'unlock'},manager)).status,200);
+assert.equal((await call('employees',{id:own.user.id,action:'password',password:'EmployeeTest123!'},manager)).status,200);
+employee=(await call('login',{username:'lan',password:'EmployeeTest123!'})).cookie;
+assert.equal((await call('state',null,employee)).data.user.name,'Lan Updated');
+assert.equal((await call('state',null,employee)).data.shifts.length,2);
 const changed=await call('password',{current:'EmployeeTest123!',password:'NewEmployeeTest123!'},employee);assert.equal(changed.status,200);assert.equal((await call('state',null,employee)).status,401);employee=changed.cookie;assert.equal((await call('logout',{},employee)).status,200);assert.equal((await call('state',null,employee)).status,401);assert.equal((await call('login',{username:'lan',password:'EmployeeTest123!'})).status,401);assert.equal((await call('login',{username:'lan',password:'NewEmployeeTest123!'})).status,200);
 const hostile=await fetch(origin+'/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.com','X-Nail-Request':'1'},body:'{}'});assert.equal(hostile.status,403);const file=await fetch(origin+'/data/nail.sqlite');assert.equal(file.status,404);
 console.log('PASS: setup, login, employee isolation, manager authorization, server clock, duplicate protection, overlap rejection, password changes, logout, CSRF and private file protection.');
 }finally{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});}}
 main().catch(e=>{console.error(e);process.exitCode=1;});
+
 
 
