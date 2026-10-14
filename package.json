@@ -1,0 +1,7 @@
+{
+  "name": "nail-boutique",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {"node": ">=24 <25"},
+  "scripts": {"start": "node server.cjs", "test": "node test-server.cjs"}
+}

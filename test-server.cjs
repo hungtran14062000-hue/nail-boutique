@@ -1,0 +1,45 @@
+const {createApp}=require('./server.cjs');const assert=require('node:assert/strict');const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+async function main(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nail-auth-test-'));const server=createApp({dbPath:path.join(dir,'test.sqlite')});await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
+async function call(route,data,cookie){const response=await fetch(origin+'/api/'+route,{method:data?'POST':'GET',headers:{...(data?{'Content-Type':'application/json','X-Nail-Request':'1',Origin:origin}:{}),...(cookie?{Cookie:cookie}:{})},body:data?JSON.stringify(data):undefined});return {status:response.status,data:await response.json(),cookie:response.headers.get('set-cookie')?.split(';')[0]};}
+try{assert.equal((await call('state')).status,401);const setup=await call('setup',{name:'Owner',username:'manager',password:'ManagerTest123!'});assert.equal(setup.status,201);const manager=setup.cookie;assert.equal((await call('setup',{name:'Other',username:'other',password:'ManagerTest123!'})).status,409);
+assert.equal((await call('users',{name:'Lan',username:'lan',password:'EmployeeTest123!'},manager)).status,201);assert.equal((await call('users',{name:'Mai',username:'mai',password:'EmployeeTest123!'},manager)).status,201);assert.equal((await call('login',{username:'lan',password:'wrong'})).status,401);
+const login=await call('login',{username:'lan',password:'EmployeeTest123!'});assert.equal(login.status,200);let employee=login.cookie;const own=(await call('state',null,employee)).data;const full=(await call('state',null,manager)).data;assert.equal(own.employees.length,1);assert.equal(full.employees.length,2);const other=full.employees.find(e=>e.id!==own.user.id);
+assert.equal((await call('clock',{employee:other.id,action:'in'},employee)).status,403);assert.equal((await call('users',{name:'Hack',username:'hack',password:'EmployeeTest123!'},employee)).status,403);assert.equal((await call('shifts',{},employee)).status,403);
+assert.equal((await call('clock',{action:'in'},employee)).status,200);assert.equal((await call('clock',{action:'in'},employee)).status,409);assert.equal((await call('clock',{action:'out'},employee)).status,200);assert.equal((await call('clock',{action:'out'},employee)).status,409);
+const before=(await call('state',null,employee)).data.shifts[0];assert(before.end);const shift={employee:own.user.id,start:'2026-01-12T22:00:00+07:00',end:'2026-01-13T06:00:00+07:00',break:30};assert.equal((await call('shifts',shift,manager)).status,200);assert.equal((await call('shifts',shift,manager)).status,409);assert.equal((await call('state',null,employee)).data.shifts.length,2);
+assert.equal((await call('pay-rate',{employee:own.user.id,rate:'12.50'},employee)).status,403);
+assert.equal((await call('pay-rate',{employee:own.user.id,rate:'-1'},manager)).status,400);
+assert.equal((await call('pay-rate',{employee:own.user.id,rate:'12.345'},manager)).status,400);
+assert.equal((await call('pay-rate',{employee:own.user.id,rate:'12,50'},manager)).status,200);
+let salary=(await call('state',null,employee)).data;
+assert.equal(salary.employees[0].rateCents,1250);
+assert.equal(salary.shifts.find(s=>s.start===new Date(shift.start).toISOString()).payCents,9375);
+assert.equal((await call('pay-rate',{employee:own.user.id,rate:'15.00'},manager)).status,200);
+salary=(await call('state',null,employee)).data;
+assert.equal(salary.employees[0].rateCents,1500);
+assert.equal(salary.shifts.find(s=>s.start===new Date(shift.start).toISOString()).payCents,9375);
+assert.equal((await call('state',null,manager)).data.employees.find(e=>e.id===other.id).rateCents,null);
+assert.equal((await call('orders?month=2026-01',null,employee)).status,403);
+const order={customer:'Camille',employee:own.user.id,date:'2026-01-12',amount:'35,50'};
+assert.equal((await call('orders',order,employee)).status,403);
+assert.equal((await call('orders',order,manager)).status,200);
+assert.equal((await call('orders',{...order,customer:'Sophie',employee:other.id,amount:'20.10'},manager)).status,200);
+let revenue=(await call('orders?month=2026-01',null,manager)).data;
+assert.equal(revenue.totalCents,5560);assert.equal(revenue.orders.length,2);
+const firstOrder=revenue.orders.find(o=>o.customer==='Camille');assert.equal(firstOrder.employee,own.user.id);
+assert.equal((await call('orders',{...order,id:firstOrder.id,date:'2026-02-01',amount:'40.00'},manager)).status,200);
+assert.equal((await call('orders?month=2026-01',null,manager)).data.totalCents,2010);
+assert.equal((await call('orders?month=2026-02',null,manager)).data.totalCents,4000);
+assert.equal((await call('orders',{...order,amount:'3.456'},manager)).status,400);
+assert.equal((await call('orders',{...order,date:'2026-02-30'},manager)).status,400);
+assert.equal((await call('orders',{...order,date:'2099-01-01'},manager)).status,400);
+assert.equal((await call('orders',{...order,employee:'missing'},manager)).status,400);
+assert.equal((await call('orders?month=2026-13',null,manager)).status,400);
+assert.equal((await call('state',null,employee)).data.orders,undefined);
+const changed=await call('password',{current:'EmployeeTest123!',password:'NewEmployeeTest123!'},employee);assert.equal(changed.status,200);assert.equal((await call('state',null,employee)).status,401);employee=changed.cookie;assert.equal((await call('logout',{},employee)).status,200);assert.equal((await call('state',null,employee)).status,401);assert.equal((await call('login',{username:'lan',password:'EmployeeTest123!'})).status,401);assert.equal((await call('login',{username:'lan',password:'NewEmployeeTest123!'})).status,200);
+const hostile=await fetch(origin+'/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.com','X-Nail-Request':'1'},body:'{}'});assert.equal(hostile.status,403);const file=await fetch(origin+'/data/nail.sqlite');assert.equal(file.status,404);
+console.log('PASS: setup, login, employee isolation, manager authorization, server clock, duplicate protection, overlap rejection, password changes, logout, CSRF and private file protection.');
+}finally{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});}}
+main().catch(e=>{console.error(e);process.exitCode=1;});
+
+
