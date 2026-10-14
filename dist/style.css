@@ -1,4 +1,5 @@
 @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Playfair+Display:wght@500;600&display=swap');
+.phone-fields{display:grid;grid-template-columns:1fr 1.3fr;gap:12px}.phone-fields select{width:100%}@media(max-width:420px){.phone-fields{grid-template-columns:1fr}}
 .profile-picture{width:100px;height:100px;object-fit:cover;border-radius:50%;background:#f3e7ec}.profile-small{width:30px;height:30px;border-radius:50%;object-fit:cover}.profile-form{max-width:520px}.profile-form label{margin-top:20px}nav{flex-wrap:wrap}
 .account-link{width:100%;margin-top:12px}#pendingAccounts{margin-bottom:28px}#pendingAccounts .staff-card{display:flex;gap:16px;align-items:center;justify-content:space-between;margin-top:12px}
 .language-control select{margin:0;padding:8px 10px;font-size:11px;width:auto;max-width:150px}.auth-card .language-control{display:flex;justify-content:flex-end;margin-bottom:16px}.account{flex-wrap:wrap}header{gap:12px}html[lang="fr"] .stats span{line-height:1.6}html[lang="fr"] nav button span{font-size:12px}

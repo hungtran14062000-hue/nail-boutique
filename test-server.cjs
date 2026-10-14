@@ -50,6 +50,24 @@ assert.equal((await call('state',null,employee)).data.user.name,'Lan Updated');
 assert.equal((await call('state',null,employee)).data.shifts.length,2);
 const changed=await call('password',{current:'EmployeeTest123!',password:'NewEmployeeTest123!'},employee);assert.equal(changed.status,200);assert.equal((await call('state',null,employee)).status,401);employee=changed.cookie;assert.equal((await call('logout',{},employee)).status,200);assert.equal((await call('state',null,employee)).status,401);assert.equal((await call('login',{username:'lan',password:'EmployeeTest123!'})).status,401);assert.equal((await call('login',{username:'lan',password:'NewEmployeeTest123!'})).status,200);
 const hostile=await fetch(origin+'/api/login',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.com','X-Nail-Request':'1'},body:'{}'});assert.equal(hostile.status,403);const file=await fetch(origin+'/data/nail.sqlite');assert.equal(file.status,404);
+
+assert.equal((await call('delete',{type:'shift',id:before.id},employee)).status,401);
+const fresh=(await call('login',{username:'lan',password:'NewEmployeeTest123!'})).cookie;
+assert.equal((await call('delete',{type:'shift',id:before.id},fresh)).status,403);
+assert.equal((await call('delete',{type:'shift',id:before.id},manager)).status,200);
+assert.equal((await call('delete',{type:'shift',id:before.id},manager)).status,404);
+const orders=(await call('orders?month=2026-02',null,manager)).data.orders;
+assert.equal((await call('delete',{type:'order',id:orders[0].id},manager)).status,200);
+assert.equal((await call('orders?month=2026-02',null,manager)).data.totalCents,0);
+assert.equal((await call('clock',{employee:own.user.id,action:'in'},manager)).status,200);
+assert.equal((await call('delete',{type:'employee',id:own.user.id},manager)).status,409);
+await call('clock',{employee:own.user.id,action:'out'},manager);
+assert.equal((await call('delete',{type:'employee',id:own.user.id},manager)).status,200);
+assert.equal((await call('state',null,fresh)).status,401);
+assert(!(await call('employees',null,manager)).data.employees.some(e=>e.id===own.user.id));
+assert((await call('state',null,manager)).data.shifts.some(s=>s.employee===own.user.id));
+assert.equal((await call('employees',{id:own.user.id,action:'unlock'},manager)).status,404);
+assert.equal((await call('delete',{type:'employee',id:full.user.id},manager)).status,404);
 console.log('PASS: setup, login, employee isolation, manager authorization, server clock, duplicate protection, overlap rejection, password changes, logout, CSRF and private file protection.');
 }finally{await new Promise(r=>server.close(r));fs.rmSync(dir,{recursive:true,force:true});}}
 main().catch(e=>{console.error(e);process.exitCode=1;});

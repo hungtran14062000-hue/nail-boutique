@@ -16,7 +16,8 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
     CREATE TABLE IF NOT EXISTS pay_rates(id INTEGER PRIMARY KEY,employee TEXT NOT NULL REFERENCES users(id),cents INTEGER NOT NULL CHECK(cents>=0),effective TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS account_approvals(user TEXT PRIMARY KEY REFERENCES users(id),approved INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS customer_orders(id TEXT PRIMARY KEY,customer TEXT NOT NULL,employee TEXT NOT NULL REFERENCES users(id),paid_date TEXT NOT NULL,cents INTEGER NOT NULL CHECK(cents>=0),created_by TEXT NOT NULL REFERENCES users(id),updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS account_controls(user TEXT PRIMARY KEY REFERENCES users(id),blocked INTEGER NOT NULL DEFAULT 0);`);
+    CREATE TABLE IF NOT EXISTS account_controls(user TEXT PRIMARY KEY REFERENCES users(id),blocked INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS deleted_employees(user TEXT PRIMARY KEY REFERENCES users(id),at TEXT NOT NULL);`);
   const attempts=new Map();
   const hash=p=>{const salt=randomBytes(16).toString('hex');return salt+':'+scryptSync(p,salt,64).toString('hex');};
   const verify=(p,h)=>{const [salt,v]=h.split(':');const a=scryptSync(p,salt,64),b=Buffer.from(v,'hex');return a.length===b.length&&timingSafeEqual(a,b);};
@@ -75,12 +76,18 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
           const users=user.role==='manager'?db.prepare("SELECT * FROM users WHERE role='employee' AND id NOT IN (SELECT user FROM account_approvals WHERE approved=0) ORDER BY name").all():[user];
           const shifts=user.role==='manager'?db.prepare('SELECT * FROM shifts ORDER BY start DESC').all():db.prepare('SELECT * FROM shifts WHERE employee=? ORDER BY start DESC').all(user.id);
           const rateFor=(id,at)=>db.prepare('SELECT cents FROM pay_rates WHERE employee=? AND effective<=? ORDER BY effective DESC,id DESC LIMIT 1').get(id,at)?.cents??null;
-          return reply(res,200,{user:cleanUser(user),pending:user.role==='manager'?db.prepare('SELECT u.id,u.name,u.username FROM users u JOIN account_approvals a ON a.user=u.id WHERE a.approved=0').all():[],employees:users.map(u=>({id:u.id,name:u.name,username:u.username,role:u.job,rateCents:rateFor(u.id,new Date().toISOString())})),shifts:shifts.map(s=>{const rateCents=rateFor(s.employee,s.start);const minutes=s.end?Math.max(0,Math.floor((new Date(s.end)-new Date(s.start))/60000)-s.break):null;return {...s,rateCents,payCents:minutes!==null&&rateCents!==null?Math.round(minutes*rateCents/60):null};})});
+          return reply(res,200,{user:cleanUser(user),pending:user.role==='manager'?db.prepare('SELECT u.id,u.name,u.username FROM users u JOIN account_approvals a ON a.user=u.id WHERE a.approved=0 AND u.id NOT IN (SELECT user FROM deleted_employees)').all():[],employees:users.map(u=>({id:u.id,name:u.name,username:u.username,role:u.job,deleted:!!db.prepare('SELECT user FROM deleted_employees WHERE user=?').get(u.id),rateCents:rateFor(u.id,new Date().toISOString())})),shifts:shifts.map(s=>{const rateCents=rateFor(s.employee,s.start);const minutes=s.end?Math.max(0,Math.floor((new Date(s.end)-new Date(s.start))/60000)-s.break):null;return {...s,rateCents,payCents:minutes!==null&&rateCents!==null?Math.round(minutes*rateCents/60):null};})});
         }
         if(req.method==='GET'&&pathname==='/api/orders'){
           manager();const month=new URL(req.url,expected).searchParams.get('month');if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month||''))fail(400,'Tháng không hợp lệ');
           const orders=db.prepare('SELECT o.*,u.name AS employee_name FROM customer_orders o JOIN users u ON u.id=o.employee WHERE substr(o.paid_date,1,7)=? ORDER BY paid_date DESC,updated_at DESC').all(month);
           return reply(res,200,{orders,totalCents:orders.reduce((n,o)=>n+o.cents,0)});
+        }
+        if(req.method==='POST'&&pathname==='/api/delete'){
+          manager();const b=await body(req);if(!['employee','shift','order'].includes(b.type)||typeof b.id!=='string')fail(400,'Thao tác không hợp lệ');
+          if(b.type==='employee'){if(!db.prepare("SELECT id FROM users WHERE id=? AND role='employee'").get(b.id))fail(404,'Không tìm thấy nhân viên');if(db.prepare('SELECT id FROM shifts WHERE employee=? AND end IS NULL').get(b.id))fail(409,'Kết thúc ca đang mở trước khi xóa nhân viên');db.prepare('INSERT OR IGNORE INTO deleted_employees VALUES(?,?)').run(b.id,new Date().toISOString());db.prepare('INSERT INTO account_controls VALUES(?,1) ON CONFLICT(user) DO UPDATE SET blocked=1').run(b.id);db.prepare('DELETE FROM sessions WHERE user=?').run(b.id);}
+          else{const table=b.type==='shift'?'shifts':'customer_orders';if(!db.prepare('SELECT id FROM '+table+' WHERE id=?').get(b.id))fail(404,'Không tìm thấy dữ liệu');db.prepare('DELETE FROM '+table+' WHERE id=?').run(b.id);}
+          audit(user.id,'delete_'+b.type,b.id);return reply(res,200,{ok:true});
         }
         if(req.method==='POST'&&pathname==='/api/orders'){
           manager();const b=await body(req),customer=String(b.customer||'').trim(),date=String(b.date||''),amount=String(b.amount??'').trim().replace(',','.');
@@ -105,10 +112,10 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
           db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'employee',String(raw.job||'Nhân viên').slice(0,60),hash(b.password));profiles.insert(id,b);audit(user.id,'create_employee',id);if(requireContactVerification)await profiles.send(id);return reply(res,201,{ok:true});
         }
         if(req.method==='GET'&&pathname==='/api/employees'){
-          manager();return reply(res,200,{employees:db.prepare("SELECT u.id,u.name,u.username,u.job,COALESCE(c.blocked,0) AS blocked,COALESCE(a.approved,1) AS approved FROM users u LEFT JOIN account_controls c ON c.user=u.id LEFT JOIN account_approvals a ON a.user=u.id WHERE u.role='employee' ORDER BY u.name").all()});
+          manager();return reply(res,200,{employees:db.prepare("SELECT u.id,u.name,u.username,u.job,COALESCE(c.blocked,0) AS blocked,COALESCE(a.approved,1) AS approved FROM users u LEFT JOIN account_controls c ON c.user=u.id LEFT JOIN account_approvals a ON a.user=u.id WHERE u.role='employee' AND u.id NOT IN (SELECT user FROM deleted_employees) ORDER BY u.name").all()});
         }
         if(req.method==='POST'&&pathname==='/api/employees'){
-          manager();const b=await body(req);const target=db.prepare("SELECT * FROM users WHERE id=? AND role='employee'").get(b.id);if(!target)fail(404,'Không tìm thấy nhân viên');
+          manager();const b=await body(req);const target=db.prepare("SELECT * FROM users WHERE id=? AND role='employee' AND id NOT IN (SELECT user FROM deleted_employees)").get(b.id);if(!target)fail(404,'Không tìm thấy nhân viên');
           if(b.action==='edit'){const name=String(b.name||'').trim(),job=String(b.job||'').trim();if(!name||name.length>80||job.length>60)fail(400,'Tên không quá 80 ký tự, chức danh không quá 60 ký tự');db.prepare('UPDATE users SET name=?,job=? WHERE id=?').run(name,job,target.id);}
           else if(b.action==='lock'||b.action==='unlock'){if(b.action==='lock'&&db.prepare('SELECT id FROM shifts WHERE employee=? AND end IS NULL').get(target.id))fail(409,'Kết thúc ca đang mở trước khi khóa nhân viên');db.prepare('INSERT INTO account_controls VALUES(?,?) ON CONFLICT(user) DO UPDATE SET blocked=excluded.blocked').run(target.id,b.action==='lock'?1:0);db.prepare('DELETE FROM sessions WHERE user=?').run(target.id);}
           else if(b.action==='password'){if(typeof b.password!=='string'||b.password.length<10||b.password.length>128)fail(400,'Mật khẩu mới cần 10–128 ký tự');db.prepare('UPDATE users SET password=? WHERE id=?').run(hash(b.password),target.id);db.prepare('DELETE FROM sessions WHERE user=?').run(target.id);}
@@ -139,7 +146,7 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
         fail(404,'Không tìm thấy chức năng');
       }
       if(req.method!=='GET')fail(405,'Không hỗ trợ');
-      const files={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/app.js':'app.js','/auth.js':'auth.js','/i18n.js':'i18n.js','/orders.js':'orders.js','/employees.js':'employees.js','/profile.js':'profile.js','/verify-email':'index.html'};const file=files[pathname];if(!file)fail(404,'Không tìm thấy trang');
+      const files={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/app.js':'app.js','/auth.js':'auth.js','/i18n.js':'i18n.js','/orders.js':'orders.js','/employees.js':'employees.js','/profile.js':'profile.js','/phone.js':'phone.js','/verify-email':'index.html'};const file=files[pathname];if(!file)fail(404,'Không tìm thấy trang');
       res.writeHead(200,{'Content-Type':file.endsWith('.js')?'text/javascript; charset=utf-8':file.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8','Cache-Control':'no-store'});fs.createReadStream(path.join(__dirname,'dist',file)).pipe(res);
     }catch(e){reply(res,e.status||500,{error:e.status?e.message:'Lỗi máy chủ, vui lòng thử lại'});}
   });
