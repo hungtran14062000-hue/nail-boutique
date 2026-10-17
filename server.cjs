@@ -2,8 +2,8 @@
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path');
 const {randomBytes,randomUUID,scryptSync,timingSafeEqual,createHash}=require('node:crypto');
 const {DatabaseSync}=require('node:sqlite');
-const {createProfiles,resendEmail}=require('./profiles.cjs');
-function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail.sqlite'),publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,setupKey=process.env.SETUP_KEY,secureCookies=process.env.NODE_ENV==='production',managerAccounts=[],requireContactVerification=true,emailSender=(process.env.RESEND_API_KEY&&process.env.EMAIL_FROM?resendEmail:null)}={}) {
+const {createProfiles}=require('./profiles.cjs');
+function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail.sqlite'),publicOrigin=process.env.PUBLIC_ORIGIN||process.env.RENDER_EXTERNAL_URL,setupKey=process.env.SETUP_KEY,secureCookies=process.env.NODE_ENV==='production',managerAccounts=[]}={}) {
   if(secureCookies&&(!publicOrigin||!publicOrigin.startsWith('https://')||!setupKey||setupKey.length<24))throw Error('Production requires HTTPS PUBLIC_ORIGIN (or RENDER_EXTERNAL_URL) and a SETUP_KEY of at least 24 characters');
   if(publicOrigin)publicOrigin=new URL(publicOrigin).origin;
   fs.mkdirSync(path.dirname(dbPath),{recursive:true});
@@ -27,7 +27,7 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
   const validateUser=b=>{const username=String(b.username||'').trim().toLowerCase(),name=String(b.name||'').trim(),password=String(b.password||''); if(!/^[a-z0-9._-]{3,40}$/.test(username)||name.length<1||name.length>80||password.length<10||password.length>128)fail(400,'Tên đăng nhập 3–40 ký tự (chữ không dấu, số, . _ -), tên không quá 80 ký tự và mật khẩu ít nhất 10 ký tự.');return {username,name,password,...profiles.validate(b)};};
   const audit=(actor,action,target)=>db.prepare('INSERT INTO audit(actor,action,target,at) VALUES(?,?,?,?)').run(actor,action,target,new Date().toISOString());
   const reply=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));};
-  const profiles=createProfiles({db,fail,audit,required:requireContactVerification,sendEmail:emailSender,origin:()=>publicOrigin||'http://localhost:'+server.address().port});
+  const profiles=createProfiles({db,fail,audit});
   async function body(req){let text='';for await(const chunk of req){text+=chunk;if(text.length>(req.url==='/api/profile'?220000:16000))fail(413,'Yêu cầu quá lớn');}try{return JSON.parse(text||'{}');}catch{fail(400,'Dữ liệu không hợp lệ');}}
   const server=http.createServer(async(req,res)=>{
     res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');
@@ -53,21 +53,19 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
           if(managerAccounts.length&&!managerAccounts.some(n=>n.toLowerCase()===b.username))fail(403,'Tài khoản này không được cấp quyền quản lý');
           if(db.prepare('SELECT id FROM users WHERE username=?').get(b.username)||(!managerAccounts.length&&db.prepare('SELECT id FROM users LIMIT 1').get()))fail(409,'Tài khoản quản lý đã được tạo');
           db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'manager','Quản lý',hash(b.password));
-          profiles.insert(id,b);if(requireContactVerification)await profiles.send(id);else newSession(id);return reply(res,201,{ok:true,verifyEmail:requireContactVerification});
+          profiles.insert(id,b);newSession(id);return reply(res,201,{ok:true});
         }
         if(req.method==='POST'&&pathname==='/api/register'){
           const b=validateUser(await body(req));if(managerAccounts.some(n=>n.toLowerCase()===b.username))fail(403,'Tên đăng nhập này dành riêng cho quản lý');
           if(db.prepare('SELECT id FROM users WHERE username=?').get(b.username))fail(409,'Tên đăng nhập đã tồn tại');
           if(db.prepare('SELECT count(*) AS n FROM account_approvals WHERE approved=0').get().n>=100)fail(429,'Danh sách chờ đã đầy, vui lòng liên hệ quản lý');
-          const id=randomUUID();db.exec('BEGIN');try{db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'employee','Nhân viên',hash(b.password));db.prepare('INSERT INTO account_approvals VALUES(?,0)').run(id);profiles.insert(id,b);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}if(requireContactVerification)await profiles.send(id);return reply(res,201,{ok:true,verifyEmail:requireContactVerification});
+          const id=randomUUID();db.exec('BEGIN');try{db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'employee','Nhân viên',hash(b.password));db.prepare('INSERT INTO account_approvals VALUES(?,0)').run(id);profiles.insert(id,b);db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}return reply(res,201,{ok:true});
         }
         if(req.method==='POST'&&pathname==='/api/login'){
           const b=await body(req),ip=tokenHash(String(b.username||'').trim().toLowerCase());for(const [key,value] of attempts){if(value.until<Date.now())attempts.delete(key);}if(attempts.size>10000)fail(429,'Đăng nhập sai nhiều lần. Thử lại sau 15 phút.');let a=attempts.get(ip);if(!a){a={count:0,until:Date.now()+15*60000};attempts.set(ip,a);}if(a.count>=10)fail(429,'Đăng nhập sai nhiều lần. Thử lại sau 15 phút.');
           const u=db.prepare('SELECT * FROM users WHERE username=?').get(String(b.username||'').trim().toLowerCase());
-          const valid=verify(String(b.password||''),u?.password||hash('dummy-password-never-used'));if(!u||!valid){a.count++;fail(401,'Tên đăng nhập hoặc mật khẩu không đúng');}if(db.prepare('SELECT user FROM account_controls WHERE user=? AND blocked=1').get(u.id))fail(403,'Tài khoản đã bị khóa');if(db.prepare('SELECT user FROM account_approvals WHERE user=? AND approved=0').get(u.id))fail(403,'Tài khoản đang chờ quản lý duyệt');if(profiles.isUnverified(u.id))fail(403,'Vui lòng xác nhận email trước khi đăng nhập');attempts.delete(ip);newSession(u.id);return reply(res,200,{ok:true});
+          const valid=verify(String(b.password||''),u?.password||hash('dummy-password-never-used'));if(!u||!valid){a.count++;fail(401,'Tên đăng nhập hoặc mật khẩu không đúng');}if(db.prepare('SELECT user FROM account_controls WHERE user=? AND blocked=1').get(u.id))fail(403,'Tài khoản đã bị khóa');if(db.prepare('SELECT user FROM account_approvals WHERE user=? AND approved=0').get(u.id))fail(403,'Tài khoản đang chờ quản lý duyệt');attempts.delete(ip);newSession(u.id);return reply(res,200,{ok:true});
         }
-        if(req.method==='POST'&&pathname==='/api/verify-email'){const b=await body(req);profiles.confirm(b.token);return reply(res,200,{ok:true});}
-        if(req.method==='POST'&&pathname==='/api/resend-email'){const b=await body(req),name=String(b.username||'').trim().toLowerCase(),key=tokenHash(name),now=Date.now();let a=attempts.get(key);if(!a||a.until<now){a={count:0,until:now+15*60000};attempts.set(key,a);}if(a.count>=10)fail(429,'Đăng nhập sai nhiều lần. Thử lại sau 15 phút.');const u=db.prepare('SELECT * FROM users WHERE username=?').get(name);if(!u||!verify(String(b.password||''),u.password)){a.count++;fail(401,'Tên đăng nhập hoặc mật khẩu không đúng');}await profiles.send(u.id);return reply(res,200,{ok:true});}
         if(!user)fail(401,'Vui lòng đăng nhập');
         if(req.method==='GET'&&pathname==='/api/profile'){const id=new URL(req.url,expected).searchParams.get('id')||user.id;const target=db.prepare('SELECT role FROM users WHERE id=?').get(id);if(id!==user.id&&(user.role!=='manager'||target?.role!=='employee'))fail(403,'Bạn chỉ được xem hồ sơ của mình');const profile=profiles.get(id);if(!profile)fail(404,'Không tìm thấy nhân viên');return reply(res,200,{profile});}
         if(req.method==='POST'&&pathname==='/api/profile'){const b=await body(req);profiles.update(user.id,b);return reply(res,200,{ok:true});}
@@ -109,7 +107,7 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
         if(req.method==='POST'&&pathname==='/api/users'){
           manager();const raw=await body(req),b=validateUser(raw),id=randomUUID();if(db.prepare('SELECT id FROM users WHERE username=?').get(b.username))fail(409,'Tên đăng nhập đã tồn tại');
           if(managerAccounts.some(n=>n.toLowerCase()===b.username))fail(403,'Tên đăng nhập này dành riêng cho quản lý');
-          db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'employee',String(raw.job||'Nhân viên').slice(0,60),hash(b.password));profiles.insert(id,b);audit(user.id,'create_employee',id);if(requireContactVerification)await profiles.send(id);return reply(res,201,{ok:true});
+          db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?)').run(id,b.username,b.name,'employee',String(raw.job||'Nhân viên').slice(0,60),hash(b.password));profiles.insert(id,b);audit(user.id,'create_employee',id);return reply(res,201,{ok:true});
         }
         if(req.method==='GET'&&pathname==='/api/employees'){
           manager();return reply(res,200,{employees:db.prepare("SELECT u.id,u.name,u.username,u.job,COALESCE(c.blocked,0) AS blocked,COALESCE(a.approved,1) AS approved FROM users u LEFT JOIN account_controls c ON c.user=u.id LEFT JOIN account_approvals a ON a.user=u.id WHERE u.role='employee' AND u.id NOT IN (SELECT user FROM deleted_employees) ORDER BY u.name").all()});
@@ -146,7 +144,7 @@ function createApp({dbPath=process.env.DB_PATH||path.join(__dirname,'data','nail
         fail(404,'Không tìm thấy chức năng');
       }
       if(req.method!=='GET')fail(405,'Không hỗ trợ');
-      const files={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/app.js':'app.js','/auth.js':'auth.js','/i18n.js':'i18n.js','/orders.js':'orders.js','/employees.js':'employees.js','/profile.js':'profile.js','/phone.js':'phone.js','/verify-email':'index.html'};const file=files[pathname];if(!file)fail(404,'Không tìm thấy trang');
+      const files={'/':'index.html','/index.html':'index.html','/style.css':'style.css','/app.js':'app.js','/auth.js':'auth.js','/i18n.js':'i18n.js','/orders.js':'orders.js','/employees.js':'employees.js','/profile.js':'profile.js','/phone.js':'phone.js'};const file=files[pathname];if(!file)fail(404,'Không tìm thấy trang');
       res.writeHead(200,{'Content-Type':file.endsWith('.js')?'text/javascript; charset=utf-8':file.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8','Cache-Control':'no-store'});fs.createReadStream(path.join(__dirname,'dist',file)).pipe(res);
     }catch(e){reply(res,e.status||500,{error:e.status?e.message:'Lỗi máy chủ, vui lòng thử lại'});}
   });

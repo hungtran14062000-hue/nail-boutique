@@ -10,7 +10,7 @@
 
 ## 3. Tạo tài khoản quản lý
 
-Sau khi dịch vụ báo Live, mở URL HTTPS mà Render cấp. Trong trang Environment của dịch vụ, xem giá trị SETUP_KEY được Render tạo tự động. Chọn Kích hoạt tài khoản quản lý trên website, chọn Manh147prao, nhập họ tên, mã thiết lập này và mật khẩu riêng ít nhất 10 ký tự. Đăng xuất rồi kích hoạt dolphineatfish tương tự. Không gửi SETUP_KEY hoặc mật khẩu trong chat hay đưa vào GitHub. Chỉ hai tên đã dành riêng được kích hoạt; mỗi tên chỉ kích hoạt một lần.
+Sau khi dịch vụ báo Live, mở URL HTTPS mà Render cấp. Trong trang Environment của dịch vụ, xem giá trị SETUP_KEY được Render tạo tự động. Chọn Kích hoạt tài khoản quản lý trên website, chọn Manh147prao, nhập họ tên, mã thiết lập này số điện thoại và mật khẩu riêng ít nhất 10 ký tự. Đăng xuất rồi kích hoạt dolphineatfish tương tự. Không gửi SETUP_KEY hoặc mật khẩu trong chat hay đưa vào GitHub. Chỉ hai tên đã dành riêng được kích hoạt; mỗi tên chỉ kích hoạt một lần.
 
 ## 4. Dùng tại tiệm
 
@@ -25,5 +25,6 @@ Nếu thêm tên miền riêng, đặt PUBLIC_ORIGIN thành URL HTTPS của tên
 Website chưa được triển khai tự động: cần tài khoản GitHub/Render của chủ sở hữu và xác nhận chi phí trên Render. Múi giờ báo cáo hiện vẫn theo trình duyệt, chưa cố định Europe/Paris giữa các thiết bị. Trước khi sử dụng chính thức tại Pháp cần thống nhất múi giờ và kiểm tra sao lưu/khôi phục dữ liệu.
 
 
-## Email và hồ sơ
-Trước khi tạo tài khoản mới, cấu hình RESEND_API_KEY và EMAIL_FROM trên Render theo EMAIL-SETUP.md. Tài khoản mới bắt buộc email và điện thoại; email phải xác nhận thật, điện thoại chưa xác thực. Không tải khóa API hoặc dữ liệu SQLite lên kho.
+
+## Hồ sơ và đăng ký
+Không cần Resend, RESEND_API_KEY hoặc EMAIL_FROM. Đăng ký bắt buộc số điện thoại có mã quốc gia, không xác thực SMS. Nhân viên tự đăng ký phải chờ quản lý duyệt. Bản mới vẫn giữ tài khoản và dữ liệu cũ.
